@@ -1,6 +1,6 @@
 # Buyer-Side Tax Declaration
 
-**Status:** Draft for working group review, revision 3
+**Status:** Draft for working group review, revision 4
 **Companion to:** PR #4, *Tax Jurisdiction Discovery, Settle-Only Provenance & SCITT Audit Receipts* (@whawk46 / Corrente Labs)
 **Scope:** Adds buyer-side qualification. Does not modify settle-only accounting, SCITT registration, or EIP-3009 event derivation.
 
@@ -18,6 +18,10 @@ This companion specifies:
 4. A **multi-axis tax result**, jurisdiction-scoped, replacing the scalar regime enumeration of revision 1.
 5. Additional **receipt fields** preserving the decision context, plus an informative aggregation principle.
 6. A **principal attribution model**, recording what the seller knew about the principal behind the signing key, how it is bound to the declaration, and what is retained. Added in revision 3.
+
+### What changed in revision 4
+
+Closes open question 10 on the basis of the review exchange of 7 and 8 September. A key-anchored `principalId` equal to the signing key makes self-attribution mechanically checkable rather than self-declared; the convention is stated in §6.6.5, the attribution invariant returns in §6.6.6 conditioned on it, and the worked example in §6.6.7 is corrected, since its agent case used a key-anchored identifier that would now read as self-attribution. Question 10 is narrowed to what remains: non-key-anchored identifiers, and whether self-attribution is SHOULD or MUST. Nothing else moves.
 
 ### What changed in revision 3
 
@@ -499,6 +503,8 @@ On `principalId` and disclosure: a receipt registered with a transparency servic
 
 The combination table above describes the full receipt held by the seller. A redacted view intended for a third party MUST be identified as such, and a masked identity MUST NOT be read as `ABSENT`.
 
+**Self-attribution.** When `principalId` is key-anchored (for example `did:pkh:eip155:<chain>:<address>`) and the address it embeds equals the recovered signer of the declaration, the presentation constitutes a self-attribution: the signing key is itself the principal. The seller establishes this by an equality check over two values it already holds, not by a declaration. The attribution payload is then the one-element object `{ principalId }`, its digest is well-defined, and the combination table above applies unchanged. The seller MAY record `VERIFIED` for such a case, the seller being the verifier and key equality the policy. A payer that is itself the principal SHOULD present a self-attribution; whether this SHOULD becomes MUST is open question 10.
+
 #### 6.6.6 Presence, verification, qualification: three distinct facts
 
 An earlier draft of this section proposed an invariant tying the absence of attribution to `qualificationBasis` under reverse charge. It is withdrawn for the following reason.
@@ -509,11 +515,21 @@ In its place:
 
 Successful tax-identifier verification MUST NOT imply verified principal attribution. Attribution presence MUST NOT imply attribution validity. These results MUST be recorded separately: tax qualification in `qualificationBasis`, attribution state in `principalAttributionStatus`.
 
-The distinction between the two checks lies in their definition and in the acceptance policy. Mechanical checks remain possible: co-presence of fields, matching digests, consistency of identifiers and linkage to the evidence used. With the current fields alone, however, `ABSENT` cannot distinguish "no delegation needed" from "attribution not supplied". Open question 8.10 addresses that precise limit.
+The distinction between the two checks lies in their definition and in the acceptance policy. Mechanical checks remain possible: co-presence of fields, matching digests, consistency of identifiers and linkage to the evidence used.
+
+Revision 3 stated that `ABSENT` could not distinguish "no delegation needed" from "attribution not supplied", and withdrew the invariant on that ground. The self-attribution convention of §6.6.5 removes the ground for key-anchored identifiers: a payer that is itself the principal can present a self-attribution at zero cost, so its absence is a choice, not an ambiguity. The invariant therefore returns, scoped to that case:
+
+```
+IF   mechanism = REVERSE_CHARGE
+AND  principalAttributionStatus = ABSENT
+THEN qualificationBasis MUST NOT be DECLARED_VERIFIED
+```
+
+This holds only where a key-anchored self-attribution was available to the payer. For a `principalId` that is not key-anchored, the ambiguity remains and the invariant does not apply. Open question 10 is narrowed to that residual case.
 
 #### 6.6.7 Worked example
 
-Reverse charge, standard supplier, agent acting for a German taxable person, attribution present and verified.
+Reverse charge, standard supplier, agent acting for a German taxable person, attribution present and verified. The principal identifier is deliberately not key-anchored: the agent's key and the principal are different parties, which is the second-hop case this section exists for.
 
 ```yaml
 # Declaration, EIP-712 signed by the agent's key
@@ -521,7 +537,7 @@ jurisdiction: DE
 taxableStatus: TAXABLE_PERSON
 taxId: DE123456789
 validUntil: 1790000000000
-principalId: "did:pkh:eip155:1:0x1234…"
+principalId: "did:web:example-gmbh.de"
 principalAttributionHash: "sha-256:7f83b165…"
 
 # Tax result
@@ -536,7 +552,7 @@ qualificationBasis: DECLARED_VERIFIED
 
 # Receipt, attribution fields
 principalAttributionStatus: VERIFIED
-principalId: "did:pkh:eip155:1:0x1234…"
+principalId: "did:web:example-gmbh.de"
 principalAttributionHash: "sha-256:7f83b165…"
 ```
 
@@ -546,9 +562,23 @@ Same situation, seller not having verified the attribution:
 
 ```yaml
 principalAttributionStatus: NOT_CHECKED
-principalId: "did:pkh:eip155:1:0x1234…"
+principalId: "did:web:example-gmbh.de"
 principalAttributionHash: "sha-256:7f83b165…"
 ```
+
+**Self-attribution.** Same supply, but the German taxable person signs directly with its own key, address `0x1234…`. Per §6.6.5, a key-anchored `principalId` equal to the signer is a self-attribution:
+
+```yaml
+# Declaration, EIP-712 signed by key 0x1234…
+principalId: "did:pkh:eip155:1:0x1234…"
+principalAttributionHash: "sha-256:<digest of {principalId}>"
+
+# Receipt
+principalAttributionStatus: VERIFIED
+principalId: "did:pkh:eip155:1:0x1234…"
+```
+
+The seller verified it by comparing the address inside the DID with the recovered signer. No delegation chain exists, none is needed, and `ABSENT` would have been a choice rather than the absence of anything to attribute.
 
 The positive check of the identifier remains recorded separately in `qualificationBasis`. This does not mean that reverse charge remains automatically justified without an attribution check: the resolver must take into account all elements and the applicable policy.
 
@@ -636,7 +666,7 @@ Corrections to retained entries are new entries referencing the original, with n
 7. **Non-EU seller, EU buyer.** Out of scope of this draft. Flagged because it will be raised.
 8. **Merchant of Record.** The entity legally supplying the service, and its relevant establishments, must be identified. Which party produces and owns the result remains to be specified; the MoR label alone does not determine it.
 9. **`supplierScheme` across several member states.** A single value cannot represent a supplier under a cross-border SME exemption in one member state and under the standard scheme in another. Whether `supplierScheme` should be scoped per place-of-supply jurisdiction, or whether the result should carry one entry per applicable jurisdiction, is open.
-10. **`NOT_APPLICABLE` as an attribution status value.** §6.6.6 drops the attribution invariant because a signer who is itself the principal has nothing to attribute, and `ABSENT` cannot distinguish "nothing to supply" from "not supplied". A sixth value, `NOT_APPLICABLE`, declared by the signer, would restore that distinction and make an invariant possible again. But it would be one more unverified self-declaration, and a dishonest agent would use it to escape attribution. The question is whether regaining mechanical checkability is worth introducing a self-declared field at exactly the point where self-declaration is the problem. I don't recommend it, but the arguments run both ways.
+10. **Self-attribution: residual cases and strength.** Revision 4 closes the honest self-custody case by the key-anchored convention of §6.6.5, which replaces the `NOT_APPLICABLE` value considered in revision 3. Two things remain. First, a `principalId` that is not key-anchored cannot be equality-checked, so `ABSENT` stays ambiguous there; whether the profile should restrict `principalId` to key-anchored forms, or accept the ambiguity for other forms, is open. Second, §6.6.5 states that a payer that is itself the principal SHOULD self-attribute; whether that becomes MUST, making `ABSENT` under reverse charge a violation rather than a policy signal, is for the WG.
 11. **Profiles and interoperability.** How to identify and version the tax profile used in messages, negotiate it, and handle an unsupported profile? How to represent several results where several tax systems are involved?
 12. **Cryptographic interfaces.** Fix EIP-712 types and domain, optional fields, digest algorithm and encoding, attribution transport, and the declaration–offer–payment binding. Define JCS/signature compatibility without arbitrarily modifying the EIP-3009 authorization.
 13. **Qualification and receipts.** Define professional capacity for the purchase, the status retained by the resolver, and an explicitly negative check. The incomplete output is defined in §4.3 by `determinationStatus: UNDETERMINED`. Specify who assembles and signs the enriched receipt, what stays with the seller, and what is communicated to the facilitator or a transparency service.
