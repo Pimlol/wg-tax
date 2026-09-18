@@ -1,6 +1,6 @@
 # Buyer-Side Tax Declaration
 
-**Status:** Draft for working group review, revision 4
+**Status:** Draft for working group review, revision 5
 **Companion to:** PR #4, *Tax Jurisdiction Discovery, Settle-Only Provenance & SCITT Audit Receipts* (@whawk46 / Corrente Labs)
 **Scope:** Adds buyer-side qualification. Does not modify settle-only accounting, SCITT registration, or EIP-3009 event derivation.
 
@@ -18,6 +18,10 @@ This companion specifies:
 4. A **multi-axis tax result**, jurisdiction-scoped, replacing the scalar regime enumeration of revision 1.
 5. Additional **receipt fields** preserving the decision context, plus an informative aggregation principle.
 6. A **principal attribution model**, recording what the seller knew about the principal behind the signing key, how it is bound to the declaration, and what is retained. Added in revision 3.
+
+### What changed in revision 5
+
+Folds the review exchange of 12 to 18 September into the text. §6.6.5 now defines the right-hand side of the self-attribution equality in place, as the payer account the settlement rail attributes the transfer to, identified by the key that signed the settlement authorization on the rail named by the settlement record; the equality covers the CAIP-10 chain namespace and reference as well as the account, both read from the settlement record; §2.2's same-key requirement is now the EVM instance of that general rule, not its definition. §6.6.6 carries its precondition inside the rule block and adds the non-key-anchored branch agreed on 15 September. §6.6.9 is new: it declares the paired conformance vectors, their scope, and the properties a runner must record, without carrying the fixtures themselves. Question 10 narrows to SHOULD versus MUST. Nothing else moves.
 
 ### What changed in revision 4
 
@@ -137,6 +141,8 @@ A wallet address does not, by itself, supply the customer's tax status and locat
 ### 2.2 Signature and binding [EVM]
 
 In the proposed EVM/EIP-3009 profile, the declaration MUST be signed with the **same key that signs the EIP-3009 payment authorization**. This binds the declaration to the payer without introducing any new identity primitive, reuses the structured-signature principle of the payment profile, and identifies the key behind the assertion. The EIP-712 types, domain and encoding of optional fields for this new declaration remain to be defined.
+
+This same-key requirement is the EVM-profile instance of a general rule stated in §6.6.5: the declaration is signed by the key that signs the settlement authorization on the rail named by the settlement record. §2.2 does not define that rule; it applies it to EIP-3009.
 
 The declaration does not prove that the signer is the natural or legal person named by `taxId`. It establishes that the **signing key** asserted the declared facts. The signature alone does not prove its time of creation; receipt and use must be observed separately.
 
@@ -503,7 +509,15 @@ On `principalId` and disclosure: a receipt registered with a transparency servic
 
 The combination table above describes the full receipt held by the seller. A redacted view intended for a third party MUST be identified as such, and a masked identity MUST NOT be read as `ABSENT`.
 
-**Self-attribution.** When `principalId` is key-anchored (for example `did:pkh:eip155:<chain>:<address>`) and the address it embeds equals the recovered signer of the declaration, the presentation constitutes a self-attribution: the signing key is itself the principal. The seller establishes this by an equality check over two values it already holds, not by a declaration. The attribution payload is then the one-element object `{ principalId }`, its digest is well-defined, and the combination table above applies unchanged. The seller MAY record `VERIFIED` for such a case, the seller being the verifier and key equality the policy. A payer that is itself the principal SHOULD present a self-attribution; whether this SHOULD becomes MUST is open question 10.
+**Self-attribution.** The convention is stated profile-agnostically, so that §2.2's [EVM] scope does not leak into it.
+
+*Left-hand side.* `principalId` is key-anchored when it is a CAIP-10 account identifier in `did:pkh` form, `did:pkh:<namespace>:<reference>:<account>`, on any rail.
+
+*Right-hand side.* The **payer account to which the settlement rail attributes the transfer**, identified by the key that signed the settlement authorization on the rail named by the settlement record. For an externally owned account the recovered signer and the payer account coincide. On an account-abstraction rail they do not: the recovered key is the account's owner, the payer account is what the rail credits, and the right-hand side is the latter. The rail has already enforced the account's own authorization; equality against the payer account is not weaker evidence.
+
+*Equality.* The convention fires when, and only when, the `<namespace>:<reference>` of `principalId` equals the CAIP-2 network identifier of the settlement, and its `<account>` equals the payer account on that rail. Both are read from the **settlement record**, never from configuration: a rail identifier taken from configuration passes all current traffic and diverges only on the tail, which is where cross-chain payers are. Same account with a different `<namespace>:<reference>` is not a self-attribution; it is a cross-chain identity claim and belongs to delegation verification, not to this shortcut.
+
+*Effect.* When the convention fires, the presentation constitutes a self-attribution: the payer account is itself the principal. The seller establishes this by an equality check over values it already holds, not by a declaration. The attribution payload is the one-element object `{ principalId }`, its digest is well-defined, and the combination table above applies unchanged. The seller MAY record `VERIFIED`, the seller being the verifier and account-and-chain equality the policy. A payer that is itself the principal SHOULD present a self-attribution; whether this SHOULD becomes MUST is open question 10.
 
 #### 6.6.6 Presence, verification, qualification: three distinct facts
 
@@ -517,15 +531,27 @@ Successful tax-identifier verification MUST NOT imply verified principal attribu
 
 The distinction between the two checks lies in their definition and in the acceptance policy. Mechanical checks remain possible: co-presence of fields, matching digests, consistency of identifiers and linkage to the evidence used.
 
-Revision 3 stated that `ABSENT` could not distinguish "no delegation needed" from "attribution not supplied", and withdrew the invariant on that ground. The self-attribution convention of §6.6.5 removes the ground for key-anchored identifiers: a payer that is itself the principal can present a self-attribution at zero cost, so its absence is a choice, not an ambiguity. The invariant therefore returns, scoped to that case:
+Revision 3 stated that `ABSENT` could not distinguish "no delegation needed" from "attribution not supplied", and withdrew the invariant on that ground. The self-attribution convention of §6.6.5 removes the ground for key-anchored identifiers: a payer that is itself the principal can present a self-attribution at zero cost, so its absence is a choice, not an ambiguity. The invariant returns with its precondition inside the block, so that a resolver or a linter reading the block alone applies it exactly where the text intends:
 
 ```
+PRECONDITION: isKeyAnchored(principalId)
 IF   mechanism = REVERSE_CHARGE
 AND  principalAttributionStatus = ABSENT
 THEN qualificationBasis MUST NOT be DECLARED_VERIFIED
 ```
 
-This holds only where a key-anchored self-attribution was available to the payer. For a `principalId` that is not key-anchored, the ambiguity remains and the invariant does not apply. Open question 10 is narrowed to that residual case.
+The precondition is not editorial. Without it, the block reaches non-key-anchored identifiers where the convention cannot fire, and a conformance test written from the block alone would apply the invariant outside its ground. With it, the reach is executable rather than implied.
+
+For the non-key-anchored case the review of 15 September settled the residue: a `principalId` that is not key-anchored cannot be equality-checked, so self-attribution is unavailable to it, and under reverse charge the only remaining basis for principal-level assurance is a verified delegation. Hence a second block:
+
+```
+PRECONDITION: NOT isKeyAnchored(principalId)
+IF   mechanism = REVERSE_CHARGE
+AND  principalAttributionStatus IS NOT VERIFIED
+THEN qualificationBasis MUST NOT be DECLARED_VERIFIED
+```
+
+Together the two blocks make `DECLARED_VERIFIED` under reverse charge available only where the principal is either the payer account itself, established by §6.6.5, or attributed by a verified delegation. Neither branch is silent. What remains open is the strength of the self-attribution recommendation, SHOULD or MUST, in question 10.
 
 #### 6.6.7 Worked example
 
@@ -566,10 +592,14 @@ principalId: "did:web:example-gmbh.de"
 principalAttributionHash: "sha-256:7f83b165…"
 ```
 
-**Self-attribution.** Same supply, but the German taxable person signs directly with its own key, address `0x1234…`. Per §6.6.5, a key-anchored `principalId` equal to the signer is a self-attribution:
+**Self-attribution.** Same supply, settled on Ethereum mainnet, `eip155:1`, but the German taxable person pays directly from its own account `0x1234…`. Per §6.6.5, a `principalId` whose chain and account both match the settlement record is a self-attribution:
 
 ```yaml
-# Declaration, EIP-712 signed by key 0x1234…
+# Settlement record
+network: eip155:1
+payerAccount: 0x1234…
+
+# Declaration, signed by the key authorizing the settlement
 principalId: "did:pkh:eip155:1:0x1234…"
 principalAttributionHash: "sha-256:<digest of {principalId}>"
 
@@ -578,7 +608,7 @@ principalAttributionStatus: VERIFIED
 principalId: "did:pkh:eip155:1:0x1234…"
 ```
 
-The seller verified it by comparing the address inside the DID with the recovered signer. No delegation chain exists, none is needed, and `ABSENT` would have been a choice rather than the absence of anything to attribute.
+The seller verified it by comparing `eip155:1` and `0x1234…` from the DID against the network and payer account in the settlement record. Had the settlement been on `eip155:8453` with the same account, the convention would not have fired. No delegation chain exists, none is needed, and `ABSENT` would have been a choice rather than the absence of anything to attribute.
 
 The positive check of the identifier remains recorded separately in `qualificationBasis`. This does not mean that reverse charge remains automatically justified without an attribution check: the resolver must take into account all elements and the applicable policy.
 
@@ -595,6 +625,20 @@ The specification does not define or select:
 Delegation mechanisms exist, including AP2 mandates, EIP-712 signed envelopes and ERC-4337 user operations, and should be referenced rather than redefined here. The proposed JCS profile defines the digest input; its binding to the selected signature mechanism remains to be finalised. Where a check is performed, its result is recorded in `principalAttributionStatus`. Citing an external mechanism demonstrates neither its compatibility nor the signer's legal authority.
 
 This follows the principle already adopted for tax rulesets: an interoperability specification creates no normative dependency on a particular component.
+
+#### 6.6.9 Conformance vectors [EVM]
+
+The self-attribution convention of §6.6.5 and the invariants of §6.6.6 admit implementations that pass every positive test and diverge on exactly one input. Two such divergences were identified in review, and each is caught by one vector and missed by the other. The vectors are therefore paired, and a conformance claim on this section requires both.
+
+**Scope.** These vectors bind the EVM profile of §2.2 and the `eu-vat` result. A vector set for another rail declares its own scope; a fixture that asserts a verdict without naming its scope MUST NOT be read as binding the convention generally.
+
+**Vector N, negative, chain namespace.** Payer account equal on both sides; `<namespace>:<reference>` of `principalId` distinct from the CAIP-2 identifier in the settlement record. Expected: the convention MUST NOT fire; `principalAttributionStatus` is `ABSENT` by rule; under `REVERSE_CHARGE`, `qualificationBasis` MUST NOT be `DECLARED_VERIFIED`. An implementation comparing accounts only passes every positive vector and diverges here.
+
+**Vector P, positive, account abstraction.** `principalId` names the smart account the rail attributes the transfer to; the recovered signer is a distinct owner key. Expected: the convention MUST fire; `principalAttributionStatus` MAY be `VERIFIED`. An implementation comparing against the recovered signer passes vector N and diverges here.
+
+**What a runner records.** For a verdict to be evidence rather than a green light, the runner records, alongside the verdict: the extraction path (JSON pointer or equivalent) of each candidate compared, asserting that the two candidates come from distinct paths and are both non-empty before any verdict is evaluated, since an empty or duplicated extraction satisfies an equality vacuously; and a digest of the artifact actually executed, not merely the runner's checkout revision, so that a third party holding only the dossier can rebuild the bytes under test. Vector N MUST be red against an implementation lacking the chain constraint and green with it; a negative vector that is green on both sides exercised nothing.
+
+**What this section does not carry.** The fixtures themselves, in JSON, and the reference runner. They are conformance artifacts, to be supplied by whoever builds them, and they bind only the scope declared above.
 
 ### 6.7 Purchase flow and evidence [INFORMATIVE]
 
@@ -666,7 +710,7 @@ Corrections to retained entries are new entries referencing the original, with n
 7. **Non-EU seller, EU buyer.** Out of scope of this draft. Flagged because it will be raised.
 8. **Merchant of Record.** The entity legally supplying the service, and its relevant establishments, must be identified. Which party produces and owns the result remains to be specified; the MoR label alone does not determine it.
 9. **`supplierScheme` across several member states.** A single value cannot represent a supplier under a cross-border SME exemption in one member state and under the standard scheme in another. Whether `supplierScheme` should be scoped per place-of-supply jurisdiction, or whether the result should carry one entry per applicable jurisdiction, is open.
-10. **Self-attribution: residual cases and strength.** Revision 4 closes the honest self-custody case by the key-anchored convention of §6.6.5, which replaces the `NOT_APPLICABLE` value considered in revision 3. Two things remain. First, a `principalId` that is not key-anchored cannot be equality-checked, so `ABSENT` stays ambiguous there; whether the profile should restrict `principalId` to key-anchored forms, or accept the ambiguity for other forms, is open. Second, §6.6.5 states that a payer that is itself the principal SHOULD self-attribute; whether that becomes MUST, making `ABSENT` under reverse charge a violation rather than a policy signal, is for the WG.
+10. **Self-attribution: strength of the recommendation.** Revision 4 closed the honest self-custody case by the key-anchored convention of §6.6.5. Revision 5 closed the non-key-anchored residue: §6.6.6 now makes `DECLARED_VERIFIED` under reverse charge unavailable there unless a delegation is verified, so `ABSENT` is no longer ambiguous on either branch. One thing remains. §6.6.5 states that a payer that is itself the principal SHOULD self-attribute; whether that becomes MUST, making `ABSENT` under reverse charge a violation rather than a policy signal, is for the WG.
 11. **Profiles and interoperability.** How to identify and version the tax profile used in messages, negotiate it, and handle an unsupported profile? How to represent several results where several tax systems are involved?
 12. **Cryptographic interfaces.** Fix EIP-712 types and domain, optional fields, digest algorithm and encoding, attribution transport, and the declaration–offer–payment binding. Define JCS/signature compatibility without arbitrarily modifying the EIP-3009 authorization.
 13. **Qualification and receipts.** Define professional capacity for the purchase, the status retained by the resolver, and an explicitly negative check. The incomplete output is defined in §4.3 by `determinationStatus: UNDETERMINED`. Specify who assembles and signs the enriched receipt, what stays with the seller, and what is communicated to the facilitator or a transparency service.
